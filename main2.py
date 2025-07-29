@@ -21,7 +21,7 @@ try:
 except ImportError:
     SileroVADAnalyzer = None
     HAS_SILERO = False
-    print("Silero VAD not available. Install with: pip install pipecat-ai[silero]")
+    logging.warning("Silero VAD not available. Install with: pip install 'pipecat-ai[silero]'")
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -48,15 +48,16 @@ class VoiceAgent:
         )
         
     async def run_conversation(self, websocket: WebSocket):
-        # Configure VAD if available
+        # Configure VAD if available, otherwise disable it
         vad_analyzer = SileroVADAnalyzer() if HAS_SILERO else None
+        vad_enabled = HAS_SILERO
         
         transport = FastAPIWebsocketTransport(
             websocket=websocket,
             params=FastAPIWebsocketTransport.Params(
                 audio_out_enabled=True,
                 add_wav_header=True,
-                vad_enabled=HAS_SILERO,
+                vad_enabled=vad_enabled,
                 vad_analyzer=vad_analyzer,
                 vad_audio_passthrough=True,
                 serializer=FastAPIWebsocketTransport.JsonFrameSerializer()
@@ -73,7 +74,11 @@ class VoiceAgent:
 
         task = PipelineTask(pipeline)
         runner = PipelineRunner()
-        await runner.run(task)
+        try:
+            await runner.run(task)
+        except Exception as e:
+            logging.error(f"Pipeline error: {e}")
+            raise
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -83,15 +88,18 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await agent.run_conversation(websocket)
     except WebSocketDisconnect:
-        print("Client disconnected")
+        logging.info("Client disconnected")
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(f"WebSocket error: {e}")
 
 @app.get("/")
 async def index():
     return HTMLResponse("""
     <html>
-    <head><title>Voice Agent</title></head>
+    <head>
+        <title>Voice Agent</title>
+        <meta charset="UTF-8">
+    </head>
     <body>
         <h2>🎙️ Voice Agent</h2>
         <div id="status">Disconnected</div>
@@ -109,11 +117,18 @@ async def index():
 
             async function connect() {
                 try {
+                    // Check if MediaDevices API is available
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        throw new Error('MediaDevices API is not supported in this browser or context');
+                    }
+                    
+                    // Request microphone access
                     audioStream = await navigator.mediaDevices.getUserMedia({ 
                         audio: { sampleRate: 16000, channelCount: 1 } 
                     });
                     
-                    ws = new WebSocket(`ws://${location.host}/ws`);
+                    // Use explicit WebSocket URL for localhost
+                    ws = new WebSocket('ws://localhost:8000/ws');
                     
                     ws.onopen = () => {
                         updateStatus('Connected - Speak now!');
@@ -124,42 +139,64 @@ async def index():
                         if (event.data instanceof Blob) {
                             const audio = new Audio();
                             audio.src = URL.createObjectURL(event.data);
-                            audio.play();
+                            audio.play().catch(err => console.error('Audio playback error:', err));
                         }
                     };
                     
-                    ws.onclose = () => updateStatus('Disconnected');
-                    ws.onerror = () => updateStatus('Error');
+                    ws.onclose = () => {
+                        updateStatus('Disconnected');
+                        disconnect();
+                    };
+                    
+                    ws.onerror = (error) => {
+                        updateStatus('WebSocket Error');
+                        console.error('WebSocket error:', error);
+                    };
                     
                 } catch (error) {
                     updateStatus('Failed: ' + error.message);
+                    console.error('Connection error:', error);
                 }
             }
 
             function setupAudio() {
-                audioContext = new AudioContext({ sampleRate: 16000 });
-                const source = audioContext.createMediaStreamSource(audioStream);
-                const processor = audioContext.createScriptProcessor(4096, 1, 1);
-                
-                processor.onaudioprocess = (event) => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        const audioData = event.inputBuffer.getChannelData(0);
-                        const int16Data = new Int16Array(audioData.length);
-                        for (let i = 0; i < audioData.length; i++) {
-                            int16Data[i] = audioData[i] * 32767;
+                try {
+                    audioContext = new AudioContext({ sampleRate: 16000 });
+                    const source = audioContext.createMediaStreamSource(audioStream);
+                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+                    
+                    processor.onaudioprocess = (event) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            const audioData = event.inputBuffer.getChannelData(0);
+                            const int16Data = new Int16Array(audioData.length);
+                            for (let i = 0; i < audioData.length; i++) {
+                                int16Data[i] = audioData[i] * 32767;
+                            }
+                            ws.send(int16Data.buffer);
                         }
-                        ws.send(int16Data.buffer);
-                    }
-                };
-                
-                source.connect(processor);
-                processor.connect(audioContext.destination);
+                    };
+                    
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+                } catch (error) {
+                    updateStatus('Audio setup error: ' + error.message);
+                    console.error('Audio setup error:', error);
+                }
             }
 
             function disconnect() {
-                if (ws) ws.close();
-                if (audioStream) audioStream.getTracks().forEach(t => t.stop());
-                if (audioContext) audioContext.close();
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+                if (audioStream) {
+                    audioStream.getTracks().forEach(t => t.stop());
+                    audioStream = null;
+                }
+                if (audioContext) {
+                    audioContext.close();
+                    audioContext = null;
+                }
                 updateStatus('Disconnected');
             }
         </script>
