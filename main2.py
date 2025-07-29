@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 import logging
@@ -117,9 +118,18 @@ async def index():
 
             async function connect() {
                 try {
-                    // Check if MediaDevices API is available
+                    // Log browser and context details for debugging
+                    console.log('Browser:', navigator.userAgent);
+                    console.log('Is Secure Context:', window.isSecureContext);
+                    console.log('Location:', window.location.href);
+
+                    // Check for MediaDevices API
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        throw new Error('MediaDevices API is not supported in this browser or context');
+                        throw new Error(
+                            'MediaDevices API is not supported. ' +
+                            'Ensure you are using a modern browser (Chrome, Firefox, Safari 15+) ' +
+                            'and accessing the page via http://localhost:8000 (not 0.0.0.0).'
+                        );
                     }
                     
                     // Request microphone access
@@ -132,11 +142,13 @@ async def index():
                     
                     ws.onopen = () => {
                         updateStatus('Connected - Speak now!');
+                        console.log('WebSocket connected');
                         setupAudio();
                     };
                     
                     ws.onmessage = (event) => {
                         if (event.data instanceof Blob) {
+                            console.log('Received audio response');
                             const audio = new Audio();
                             audio.src = URL.createObjectURL(event.data);
                             audio.play().catch(err => console.error('Audio playback error:', err));
@@ -145,6 +157,7 @@ async def index():
                     
                     ws.onclose = () => {
                         updateStatus('Disconnected');
+                        console.log('WebSocket disconnected');
                         disconnect();
                     };
                     
@@ -178,6 +191,7 @@ async def index():
                     
                     source.connect(processor);
                     processor.connect(audioContext.destination);
+                    console.log('Audio processing setup complete');
                 } catch (error) {
                     updateStatus('Audio setup error: ' + error.message);
                     console.error('Audio setup error:', error);
@@ -198,6 +212,7 @@ async def index():
                     audioContext = null;
                 }
                 updateStatus('Disconnected');
+                console.log('Disconnected and cleaned up');
             }
         </script>
     </body>
