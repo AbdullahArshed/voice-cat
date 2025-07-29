@@ -43,13 +43,26 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 app = FastAPI()
 
+
 class DummyAudioSerializer:
     type = "audio/raw"
-    def serialize(self, data): return data
-    def deserialize(self, data): return data
+
+    def serialize(self, data):
+        return data
+
+    def deserialize(self, data):
+        # Defensive check to prevent error if string received instead of bytes
+        if isinstance(data, str):
+            raise TypeError(
+                "Expected bytes for audio data but received str. "
+                "Ensure frontend sends raw binary audio, not JSON or text."
+            )
+        return data
+
     async def setup(self, frame):
         # No setup needed for dummy serializer
         pass
+
 
 class TransportParams:
     def __init__(
@@ -61,12 +74,12 @@ class TransportParams:
         vad_audio_passthrough=False,
         audio_in_sample_rate=16000,
         audio_in_filter=None,
-        session_timeout=30  # <-- Add this parameter with a default value
+        session_timeout=30,  # Default value
     ):
         self.audio_out = audio_out
         self.audio_in_enabled = audio_in_enabled
         self.vad_analyzer = vad_analyzer
-        self.turn_analyzer = None 
+        self.turn_analyzer = None
         self.add_wav_header = add_wav_header
         self.audio_in_passthrough = False
         self.camera_in_enabled = False
@@ -74,7 +87,7 @@ class TransportParams:
         self._vad_audio_passthrough = vad_audio_passthrough
         self.audio_in_sample_rate = audio_in_sample_rate
         self.audio_in_filter = audio_in_filter
-        self.session_timeout = session_timeout  # <-- Set the attribute here
+        self.session_timeout = session_timeout
 
     @property
     def vad_enabled(self):
@@ -82,12 +95,7 @@ class TransportParams:
 
     @property
     def vad_audio_passthrough(self):
-        # provide the property for backward compatibility
         return self._vad_audio_passthrough
-
-        
-
-
 
 
 class VoiceAgent:
@@ -100,37 +108,46 @@ class VoiceAgent:
         self.tts = OpenAITTSService(api_key=api_key, voice="alloy")
         try:
             from pipecat.audio.vad.silero import SileroVADAnalyzer
+
             self.vad_analyzer = SileroVADAnalyzer()
             self.has_silero = True
         except ImportError:
             self.vad_analyzer = None
             self.has_silero = False
-            logger.warning("Silero VAD not available. Install with: pip install 'pipecat-ai[silero]'")
+            logger.warning(
+                "Silero VAD not available. Install with: pip install 'pipecat-ai[silero]'"
+            )
 
     async def run_conversation(self, websocket: WebSocket):
         params = TransportParams(
-        audio_out=True,
-        audio_in_enabled=self.has_silero,
-        vad_analyzer=self.vad_analyzer,
-        add_wav_header=True,
-         vad_audio_passthrough=True  # pass this explicitly
+            audio_out=True,
+            audio_in_enabled=self.has_silero,
+            vad_analyzer=self.vad_analyzer,
+            add_wav_header=True,
+            vad_audio_passthrough=True,
         )
 
         logger.debug(f"Initializing transport with params: {vars(params)}")
         transport = FastAPIWebsocketTransport(websocket=websocket, params=params)
 
-        initial = LLMMessagesFrame(messages=[
-            SystemMessage(content="You are a helpful voice assistant. Keep responses short and conversational.")
-        ])
+        initial = LLMMessagesFrame(
+            messages=[
+                SystemMessage(
+                    content="You are a helpful voice assistant. Keep responses short and conversational."
+                )
+            ]
+        )
         context = FrameEmitter(initial)
 
-        pipeline = Pipeline([
-            transport.input(),
-            context,
-            self.llm,
-            self.tts,
-            transport.output(),
-        ])
+        pipeline = Pipeline(
+            [
+                transport.input(),
+                context,
+                self.llm,
+                self.tts,
+                transport.output(),
+            ]
+        )
         task = PipelineTask(pipeline)
         runner = PipelineRunner()
         await runner.run(task)
@@ -148,9 +165,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
 
+
 @app.get("/")
 async def index():
-    return HTMLResponse("""
+    return HTMLResponse(
+        """
     <html>
     <head><title>Voice Agent</title><meta charset="UTF-8"></head>
     <body>
@@ -160,9 +179,11 @@ async def index():
         <button onclick="disconnect()">Disconnect</button>
         <script>
         let ws = null, audioStream = null, audioContext = null;
+
         function updateStatus(msg) {
             document.getElementById('status').textContent = msg;
         }
+
         async function connect() {
             try {
                 if (!navigator.mediaDevices?.getUserMedia)
@@ -171,6 +192,7 @@ async def index():
                     audio: { sampleRate: 16000, channelCount: 1 }
                 });
                 ws = new WebSocket('ws://localhost:8000/ws');
+                ws.binaryType = 'arraybuffer';  // Ensure binary messages are treated as ArrayBuffer
                 ws.onopen = () => {
                     updateStatus('Connected - Speak now!');
                     setupAudio();
@@ -197,22 +219,33 @@ async def index():
                 console.error(err);
             }
         }
+
+        function floatTo16BitPCM(input) {
+            const output = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+                output[i] = Math.max(-32768, Math.min(32767, input[i] * 32767));
+            }
+            return output;
+        }
+
         function setupAudio() {
             audioContext = new AudioContext({ sampleRate: 16000 });
             const source = audioContext.createMediaStreamSource(audioStream);
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
             processor.onaudioprocess = event => {
                 if (ws?.readyState === WebSocket.OPEN) {
                     const audioData = event.inputBuffer.getChannelData(0);
-                    const int16 = new Int16Array(audioData.length);
-                    for (let i = 0; i < audioData.length; i++)
-                        int16[i] = audioData[i] * 32767;
-                    ws.send(int16.buffer);
+                    const pcmData = floatTo16BitPCM(audioData);
+                    // Send raw binary audio (ArrayBuffer)
+                    ws.send(pcmData.buffer);
                 }
             };
+
             source.connect(processor);
             processor.connect(audioContext.destination);
         }
+
         function disconnect() {
             ws?.close();
             audioStream?.getTracks().forEach(t => t.stop());
@@ -223,8 +256,11 @@ async def index():
         </script>
     </body>
     </html>
-    """)
+    """
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main2:app", host="0.0.0.0", port=8000, reload=True)
