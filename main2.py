@@ -1,219 +1,225 @@
-
 import os
-import asyncio
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 
 from pipecat.frames.frames import LLMMessagesFrame
+from pipecat.processors.frame_processor import FrameProcessor
+
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketTransport
 
-# Try to import Silero VAD, fall back to None if not available
-try:
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    HAS_SILERO = True
-except ImportError:
-    SileroVADAnalyzer = None
-    HAS_SILERO = False
-    logging.warning("Silero VAD not available. Install with: pip install 'pipecat-ai[silero]'")
+from langchain_core.messages import SystemMessage
 
-logging.basicConfig(level=logging.INFO)
+
+class FrameEmitter(FrameProcessor):
+    def __init__(self, initial_frame):
+        super().__init__()
+        self.initial_frame = initial_frame
+        self._sent_initial = False
+
+    def set_parent(self, parent):
+        # Required by Pipecat processor chain
+        self._parent = parent
+
+    async def process(self, frame):
+        if not self._sent_initial:
+            self._sent_initial = True
+            # Yield initial system message frame first
+            yield self.initial_frame
+        # Then yield incoming frame downstream
+        yield frame
+
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
-
 app = FastAPI()
+
+class DummyAudioSerializer:
+    type = "audio/raw"
+    def serialize(self, data): return data
+    def deserialize(self, data): return data
+    async def setup(self, frame):
+        # No setup needed for dummy serializer
+        pass
+
+class TransportParams:
+    def __init__(
+        self,
+        audio_out,
+        audio_in_enabled,
+        vad_analyzer,
+        add_wav_header,
+        vad_audio_passthrough=False,
+        audio_in_sample_rate=16000,
+        audio_in_filter=None,
+        session_timeout=30  # <-- Add this parameter with a default value
+    ):
+        self.audio_out = audio_out
+        self.audio_in_enabled = audio_in_enabled
+        self.vad_analyzer = vad_analyzer
+        self.turn_analyzer = None 
+        self.add_wav_header = add_wav_header
+        self.audio_in_passthrough = False
+        self.camera_in_enabled = False
+        self.serializer = DummyAudioSerializer()
+        self._vad_audio_passthrough = vad_audio_passthrough
+        self.audio_in_sample_rate = audio_in_sample_rate
+        self.audio_in_filter = audio_in_filter
+        self.session_timeout = session_timeout  # <-- Set the attribute here
+
+    @property
+    def vad_enabled(self):
+        return self.audio_in_enabled
+
+    @property
+    def vad_audio_passthrough(self):
+        # provide the property for backward compatibility
+        return self._vad_audio_passthrough
+
+        
+
+
+
 
 class VoiceAgent:
     def __init__(self):
-        self.llm = OpenAILLMService(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            model="gpt-4o-mini"
-        )
-        
-        self.tts = OpenAITTSService(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            voice="alloy"
-        )
-        
-        self.context = OpenAILLMContext(
-            messages=[{
-                "role": "system", 
-                "content": "You are a helpful voice assistant. Keep responses short and conversational."
-            }]
-        )
-        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("OPENAI_API_KEY not found in .env file")
+            raise ValueError("OPENAI_API_KEY is required")
+        self.llm = OpenAILLMService(api_key=api_key, model="gpt-4o-mini")
+        self.tts = OpenAITTSService(api_key=api_key, voice="alloy")
+        try:
+            from pipecat.audio.vad.silero import SileroVADAnalyzer
+            self.vad_analyzer = SileroVADAnalyzer()
+            self.has_silero = True
+        except ImportError:
+            self.vad_analyzer = None
+            self.has_silero = False
+            logger.warning("Silero VAD not available. Install with: pip install 'pipecat-ai[silero]'")
+
     async def run_conversation(self, websocket: WebSocket):
-        # Configure VAD if available, otherwise disable it
-        vad_analyzer = SileroVADAnalyzer() if HAS_SILERO else None
-        vad_enabled = HAS_SILERO
-        
-        transport = FastAPIWebsocketTransport(
-            websocket=websocket,
-            params=FastAPIWebsocketTransport.Params(
-                audio_out_enabled=True,
-                add_wav_header=True,
-                vad_enabled=vad_enabled,
-                vad_analyzer=vad_analyzer,
-                vad_audio_passthrough=True,
-                serializer=FastAPIWebsocketTransport.JsonFrameSerializer()
-            )
+        params = TransportParams(
+        audio_out=True,
+        audio_in_enabled=self.has_silero,
+        vad_analyzer=self.vad_analyzer,
+        add_wav_header=True,
+         vad_audio_passthrough=True  # pass this explicitly
         )
+
+        logger.debug(f"Initializing transport with params: {vars(params)}")
+        transport = FastAPIWebsocketTransport(websocket=websocket, params=params)
+
+        initial = LLMMessagesFrame(messages=[
+            SystemMessage(content="You are a helpful voice assistant. Keep responses short and conversational.")
+        ])
+        context = FrameEmitter(initial)
 
         pipeline = Pipeline([
             transport.input(),
-            self.context,
+            context,
             self.llm,
             self.tts,
             transport.output(),
         ])
-
         task = PipelineTask(pipeline)
         runner = PipelineRunner()
-        try:
-            await runner.run(task)
-        except Exception as e:
-            logging.error(f"Pipeline error: {e}")
-            raise
+        await runner.run(task)
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    logger.debug("WebSocket connection accepted")
     agent = VoiceAgent()
-    
     try:
         await agent.run_conversation(websocket)
     except WebSocketDisconnect:
-        logging.info("Client disconnected")
+        logger.info("Client disconnected")
     except Exception as e:
-        logging.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
 
 @app.get("/")
 async def index():
     return HTMLResponse("""
     <html>
-    <head>
-        <title>Voice Agent</title>
-        <meta charset="UTF-8">
-    </head>
+    <head><title>Voice Agent</title><meta charset="UTF-8"></head>
     <body>
         <h2>🎙️ Voice Agent</h2>
         <div id="status">Disconnected</div>
         <button onclick="connect()">Connect</button>
         <button onclick="disconnect()">Disconnect</button>
-        
         <script>
-            let ws = null;
-            let audioStream = null;
-            let audioContext = null;
-
-            function updateStatus(msg) {
-                document.getElementById('status').textContent = msg;
-            }
-
-            async function connect() {
-                try {
-                    // Log browser and context details for debugging
-                    console.log('Browser:', navigator.userAgent);
-                    console.log('Is Secure Context:', window.isSecureContext);
-                    console.log('Location:', window.location.href);
-
-                    // Check for MediaDevices API
-                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                        throw new Error(
-                            'MediaDevices API is not supported. ' +
-                            'Ensure you are using a modern browser (Chrome, Firefox, Safari 15+) ' +
-                            'and accessing the page via http://localhost:8000 (not 0.0.0.0).'
-                        );
+        let ws = null, audioStream = null, audioContext = null;
+        function updateStatus(msg) {
+            document.getElementById('status').textContent = msg;
+        }
+        async function connect() {
+            try {
+                if (!navigator.mediaDevices?.getUserMedia)
+                    throw new Error('MediaDevices API not supported');
+                audioStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { sampleRate: 16000, channelCount: 1 }
+                });
+                ws = new WebSocket('ws://localhost:8000/ws');
+                ws.onopen = () => {
+                    updateStatus('Connected - Speak now!');
+                    setupAudio();
+                };
+                ws.onmessage = event => {
+                    if (event.data instanceof Blob) {
+                        const audio = new Audio();
+                        audio.src = URL.createObjectURL(event.data);
+                        audio.play().catch(console.error);
+                    } else {
+                        console.log('Non-audio message:', event.data);
                     }
-                    
-                    // Request microphone access
-                    audioStream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: { sampleRate: 16000, channelCount: 1 } 
-                    });
-                    
-                    // Use explicit WebSocket URL for localhost
-                    ws = new WebSocket('ws://localhost:8000/ws');
-                    
-                    ws.onopen = () => {
-                        updateStatus('Connected - Speak now!');
-                        console.log('WebSocket connected');
-                        setupAudio();
-                    };
-                    
-                    ws.onmessage = (event) => {
-                        if (event.data instanceof Blob) {
-                            console.log('Received audio response');
-                            const audio = new Audio();
-                            audio.src = URL.createObjectURL(event.data);
-                            audio.play().catch(err => console.error('Audio playback error:', err));
-                        }
-                    };
-                    
-                    ws.onclose = () => {
-                        updateStatus('Disconnected');
-                        console.log('WebSocket disconnected');
-                        disconnect();
-                    };
-                    
-                    ws.onerror = (error) => {
-                        updateStatus('WebSocket Error');
-                        console.error('WebSocket error:', error);
-                    };
-                    
-                } catch (error) {
-                    updateStatus('Failed: ' + error.message);
-                    console.error('Connection error:', error);
-                }
+                };
+                ws.onclose = () => {
+                    updateStatus('Disconnected');
+                    disconnect();
+                };
+                ws.onerror = err => {
+                    updateStatus('WebSocket Error');
+                    console.error(err);
+                };
+            } catch (err) {
+                updateStatus('Failed: ' + err.message);
+                console.error(err);
             }
-
-            function setupAudio() {
-                try {
-                    audioContext = new AudioContext({ sampleRate: 16000 });
-                    const source = audioContext.createMediaStreamSource(audioStream);
-                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-                    
-                    processor.onaudioprocess = (event) => {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            const audioData = event.inputBuffer.getChannelData(0);
-                            const int16Data = new Int16Array(audioData.length);
-                            for (let i = 0; i < audioData.length; i++) {
-                                int16Data[i] = audioData[i] * 32767;
-                            }
-                            ws.send(int16Data.buffer);
-                        }
-                    };
-                    
-                    source.connect(processor);
-                    processor.connect(audioContext.destination);
-                    console.log('Audio processing setup complete');
-                } catch (error) {
-                    updateStatus('Audio setup error: ' + error.message);
-                    console.error('Audio setup error:', error);
+        }
+        function setupAudio() {
+            audioContext = new AudioContext({ sampleRate: 16000 });
+            const source = audioContext.createMediaStreamSource(audioStream);
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = event => {
+                if (ws?.readyState === WebSocket.OPEN) {
+                    const audioData = event.inputBuffer.getChannelData(0);
+                    const int16 = new Int16Array(audioData.length);
+                    for (let i = 0; i < audioData.length; i++)
+                        int16[i] = audioData[i] * 32767;
+                    ws.send(int16.buffer);
                 }
-            }
-
-            function disconnect() {
-                if (ws) {
-                    ws.close();
-                    ws = null;
-                }
-                if (audioStream) {
-                    audioStream.getTracks().forEach(t => t.stop());
-                    audioStream = null;
-                }
-                if (audioContext) {
-                    audioContext.close();
-                    audioContext = null;
-                }
-                updateStatus('Disconnected');
-                console.log('Disconnected and cleaned up');
-            }
+            };
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+        function disconnect() {
+            ws?.close();
+            audioStream?.getTracks().forEach(t => t.stop());
+            audioContext?.close();
+            ws = audioStream = audioContext = null;
+            updateStatus('Disconnected');
+        }
         </script>
     </body>
     </html>
