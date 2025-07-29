@@ -97,7 +97,26 @@ class TransportParams:
     def vad_audio_passthrough(self):
         return self._vad_audio_passthrough
 
+class FilteredInputWrapper(FrameProcessor):
+    def __init__(self, wrapped_input):
+        super().__init__()
+        self._wrapped_input = wrapped_input
 
+    def set_parent(self, parent):
+        self._parent = parent
+        if hasattr(self._wrapped_input, "set_parent"):
+            self._wrapped_input.set_parent(parent)
+
+    async def process(self, frame=None):
+        # Since this is an input, ignore incoming frame
+        async for frame in self._wrapped_input.process():
+            if hasattr(frame, "data"):
+                if isinstance(frame.data, bytes):
+                    yield frame
+                else:
+                    logger.warning(f"Skipping frame with non-bytes data: {type(frame.data)}")
+            else:
+                yield frame
 class VoiceAgent:
     def __init__(self):
         api_key = os.getenv("OPENAI_API_KEY")
@@ -140,14 +159,15 @@ class VoiceAgent:
         context = FrameEmitter(initial)
 
         pipeline = Pipeline(
-            [
-                transport.input(),
-                context,
-                self.llm,
-                self.tts,
-                transport.output(),
-            ]
+        [
+        FilteredInputWrapper(transport.input()),
+        context,
+        self.llm,
+        self.tts,
+        transport.output(),
+        ]
         )
+
         task = PipelineTask(pipeline)
         runner = PipelineRunner()
         await runner.run(task)
