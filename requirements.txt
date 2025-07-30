@@ -1,29 +1,33 @@
 # Core Web Framework
-fastapi[all]==0.104.1
-uvicorn[standard]==0.24.0
+fastapi[all]>=0.104.1
+uvicorn[standard]>=0.24.0
 
 # Environment Management
-python-dotenv==1.0.0
+python-dotenv>=1.0.0
 
 # Pipecat AI Framework (Main Voice/LLM Library)
-pipecat-ai[openai,google]==0.0.45
+pipecat-ai[openai,google]>=0.0.45
 
 # OpenAI Integration (Fallback support)
-openai~=1.50.2
+openai>=1.50.2
 
 # Text-to-Speech
-gtts==2.4.0
+gtts>=2.4.0
 
 # Logging
-loguru==0.7.2
+loguru>=0.7.2
 
 # Additional Web Dependencies (included with fastapi[all] but listed for clarity)
-websockets==12.0
-starlette==0.27.0
+websockets>=12.0
+starlette>=0.27.0
 
-# Audio Processing (if needed for future enhancements)
-# soundfile==0.12.1
-# numpy==1.24.3
+# Audio Processing (needed for streaming voice chat)
+soundfile>=0.12.1
+numpy>=1.26.0
+
+# Additional dependencies for streaming (install separately for macOS)
+# silero-vad>=4.0.1
+# torch>=2.0.0
 
 # Optional: For better async performance
-# aiohttp==3.9.1
+aiohttp==3.9.1

@@ -1,0 +1,27 @@
+# Simplified requirements for Python 3.13 compatibility
+
+# Core Web Framework
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# AI and Audio
+openai>=1.50.2
+gtts>=2.4.0
+
+# Logging
+loguru>=0.7.2
+
+# Web Dependencies
+websockets>=12.0
+
+# Basic audio processing (install these first if you have issues)
+# numpy>=1.26.0
+# soundfile>=0.12.1
+
+# Advanced streaming dependencies (install separately if needed)
+# pipecat-ai[openai]>=0.0.45
+# torch>=2.0.0
+# silero-vad>=4.0.1 
