@@ -15,7 +15,7 @@ from loguru import logger
 from gtts import gTTS
 
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.openai import OpenAILLMService
 from pipecat.frames.frames import LLMMessagesFrame, TextFrame
 
 # Load environment
