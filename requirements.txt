@@ -29,5 +29,8 @@ numpy>=1.26.0
 # silero-vad>=4.0.1
 # torch>=2.0.0
 
-# Optional: For better async performance
-aiohttp==3.9.1
+# HTTP client for API calls (ElevenLabs)
+httpx>=0.24.0
+
+# Optional: For better async performance (updated for pipecat compatibility)
+aiohttp>=3.11.12
