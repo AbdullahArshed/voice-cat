@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Conversation Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #333;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 600px;
+            width: 90%;
+            margin: 20px;
+        }
+
+        h1 {
+            color: #4a5568;
+            margin-bottom: 30px;
+            font-size: 2.2em;
+            font-weight: 300;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .status.connected {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+        }
+
+        .status.disconnected {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+
+        .status.processing {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+            color: white;
+        }
+
+        .voice-controls {
+            margin: 30px 0;
+        }
+
+        .mic-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            font-size: 2.5em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(66, 153, 225, 0.3);
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mic-button:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(66, 153, 225, 0.4);
+        }
+
+        .mic-button.listening {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            animation: pulse 1.5s infinite;
+        }
+
+        .mic-button.processing {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+            animation: spin 2s linear infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .conversation {
+            margin-top: 30px;
+            text-align: left;
+            max-height: 300px;
+            overflow-y: auto;
+            background: #f7fafc;
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        .message {
+            margin: 15px 0;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            word-wrap: break-word;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .ai-message {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+            margin-right: auto;
+        }
+
+        .transcript {
+            margin: 20px 0;
+            padding: 15px;
+            background: #edf2f7;
+            border-radius: 8px;
+            font-style: italic;
+            color: #4a5568;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .control-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 25px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .error {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+        }
+
+        .audio-visualizer {
+            width: 100%;
+            height: 60px;
+            background: #edf2f7;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .wave-bar {
+            width: 4px;
+            height: 20px;
+            background: #4299e1;
+            margin: 0 2px;
+            border-radius: 2px;
+            animation: wave 1s ease-in-out infinite;
+        }
+
+        .wave-bar:nth-child(2) { animation-delay: 0.1s; }
+        .wave-bar:nth-child(3) { animation-delay: 0.2s; }
+        .wave-bar:nth-child(4) { animation-delay: 0.3s; }
+        .wave-bar:nth-child(5) { animation-delay: 0.4s; }
+
+        @keyframes wave {
+            0%, 100% { height: 20px; }
+            50% { height: 40px; }
+        }
+
+        .latency-display {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8fafc;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .latency-display h3 {
+            margin: 0 0 15px 0;
+            color: #4a5568;
+            font-size: 1.1em;
+            text-align: center;
+        }
+
+        .latency-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .latency-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .latency-label {
+            font-weight: 500;
+            color: #4a5568;
+            font-size: 0.9em;
+        }
+
+        .latency-value {
+            font-weight: bold;
+            color: #2d3748;
+            font-family: 'Courier New', monospace;
+            padding: 2px 8px;
+            background: #edf2f7;
+            border-radius: 4px;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .latency-value.total {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+            font-size: 1.1em;
+        }
+
+        .latency-value.fast {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+        }
+
+        .latency-value.medium {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+            color: white;
+        }
+
+        .latency-value.slow {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .mic-button {
+                width: 100px;
+                height: 100px;
+                font-size: 2em;
+            }
+
+            .latency-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Voice Conversation Agent</h1>
+        
+        <div id="status" class="status disconnected">
+            Connecting to server...
+        </div>
+
+        <div class="voice-controls">
+            <button id="micButton" class="mic-button" disabled>
+                🎤
+            </button>
+            <p style="margin-top: 15px; color: #666;">Click to speak</p>
+        </div>
+
+        <div id="transcript" class="transcript">
+            Ready to listen...
+        </div>
+
+        <div id="audioVisualizer" class="audio-visualizer" style="display: none;">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+        </div>
+
+        <div id="latencyDisplay" class="latency-display">
+            <h3>📊 Real-time Latency Monitoring</h3>
+            <div class="latency-grid">
+                <div class="latency-item">
+                    <span class="latency-label">🧠 OpenAI API:</span>
+                    <span id="openaiLatency" class="latency-value">-</span>
+                </div>
+                <div class="latency-item">
+                    <span class="latency-label">🔗 WebSocket Connect:</span>
+                    <span id="websocketLatency" class="latency-value">-</span>
+                </div>
+                <div class="latency-item">
+                    <span class="latency-label">🎵 First Audio Chunk:</span>
+                    <span id="firstChunkLatency" class="latency-value">-</span>
+                </div>
+                <div class="latency-item">
+                    <span class="latency-label">⚡ Total Round-trip:</span>
+                    <span id="totalLatency" class="latency-value total">-</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="clearBtn" class="control-btn">Clear Conversation</button>
+            <button id="muteBtn" class="control-btn">Mute Audio</button>
+        </div>
+
+        <div id="conversation" class="conversation">
+            <div class="message ai-message">
+                👋 Hi! I'm your voice assistant. Click the microphone button and start speaking!
+            </div>
+        </div>
+    </div>
+
+    <audio id="responseAudio" preload="auto"></audio>
+
+    <script>
+        class VoiceAgent {
+            constructor() {
+                this.ws = null;
+                this.clientId = Math.random().toString(36).substr(2, 9);
+                this.recognition = null;
+                this.isListening = false;
+                this.isProcessing = false;
+                this.isMuted = false;
+                
+                // Streaming audio properties for ultra-low latency
+                this.audioChunks = [];
+                this.audioQueue = [];
+                this.isStreaming = false;
+                this.currentChunkIndex = 0;
+                
+                this.initializeElements();
+                this.initializeSpeechRecognition();
+                this.connectWebSocket();
+                this.setupEventListeners();
+            }
+
+            initializeElements() {
+                this.statusEl = document.getElementById('status');
+                this.micButton = document.getElementById('micButton');
+                this.transcriptEl = document.getElementById('transcript');
+                this.conversationEl = document.getElementById('conversation');
+                this.clearBtn = document.getElementById('clearBtn');
+                this.muteBtn = document.getElementById('muteBtn');
+                this.audioEl = document.getElementById('responseAudio');
+                this.visualizerEl = document.getElementById('audioVisualizer');
+                
+                // Latency display elements
+                this.openaiLatencyEl = document.getElementById('openaiLatency');
+                this.websocketLatencyEl = document.getElementById('websocketLatency');
+                this.firstChunkLatencyEl = document.getElementById('firstChunkLatency');
+                this.totalLatencyEl = document.getElementById('totalLatency');
+            }
+
+            initializeSpeechRecognition() {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    this.recognition = new SpeechRecognition();
+                    
+                    this.recognition.continuous = false;
+                    this.recognition.interimResults = true;
+                    this.recognition.lang = 'en-US';
+                    
+                    this.recognition.onstart = () => {
+                        this.isListening = true;
+                        this.updateUI();
+                        this.transcriptEl.textContent = 'Listening...';
+                        this.showVisualizer();
+                    };
+                    
+                    this.recognition.onresult = (event) => {
+                        let interim = '';
+                        let final = '';
+                        
+                        for (let i = event.resultIndex; i < event.results.length; i++) {
+                            const transcript = event.results[i][0].transcript;
+                            if (event.results[i].isFinal) {
+                                final += transcript;
+                            } else {
+                                interim += transcript;
+                            }
+                        }
+                        
+                        this.transcriptEl.textContent = final || interim || 'Listening...';
+                        
+                        if (final) {
+                            this.sendMessage(final);
+                        }
+                    };
+                    
+                    this.recognition.onerror = (event) => {
+                        console.error('Speech recognition error:', event.error);
+                        this.showError(`Speech recognition error: ${event.error}`);
+                        this.stopListening();
+                    };
+                    
+                    this.recognition.onend = () => {
+                        this.stopListening();
+                    };
+                } else {
+                    this.showError('Speech recognition not supported in this browser');
+                }
+            }
+
+            connectWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws/${this.clientId}`;
+                
+                this.ws = new WebSocket(wsUrl);
+                
+                this.ws.onopen = () => {
+                    this.updateStatus('Connected', 'connected');
+                    this.micButton.disabled = false;
+                };
+                
+                this.ws.onmessage = (event) => {
+                    const message = JSON.parse(event.data);
+                    this.handleWebSocketMessage(message);
+                };
+                
+                this.ws.onclose = () => {
+                    this.updateStatus('Disconnected', 'disconnected');
+                    this.micButton.disabled = true;
+                    setTimeout(() => this.connectWebSocket(), 3000);
+                };
+                
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    this.showError('Connection error');
+                };
+            }
+
+            handleWebSocketMessage(message) {
+                switch (message.type) {
+                    case 'processing':
+                        this.isProcessing = true;
+                        this.updateUI();
+                        this.updateStatus('Processing...', 'processing');
+                        this.initializeStreamingAudio();
+                        this.resetLatencyDisplay();
+                        break;
+                        
+                    case 'ai_response':
+                        this.addMessage(message.text, 'ai');
+                        break;
+                        
+                    case 'audio_chunk':
+                        // Handle streaming audio chunks for ultra-low latency
+                        this.playAudioChunk(message.audio);
+                        break;
+                        
+                    case 'audio_response':
+                        if (message.is_final) {
+                            // Final audio message - finish streaming
+                            this.finalizeStreamingAudio();
+                            this.isProcessing = false;
+                            this.updateUI();
+                            this.updateStatus('Connected', 'connected');
+                        } else {
+                            // Legacy support for non-streaming audio
+                            this.playAudioResponse(message.audio);
+                            this.isProcessing = false;
+                            this.updateUI();
+                            this.updateStatus('Connected', 'connected');
+                        }
+                        break;
+                        
+                    case 'latency_measurement':
+                        this.updateLatencyDisplay(message);
+                        break;
+                        
+                    case 'error':
+                        this.showError(message.message);
+                        this.isProcessing = false;
+                        this.updateUI();
+                        break;
+                }
+            }
+
+            setupEventListeners() {
+                this.micButton.addEventListener('click', () => {
+                    if (this.isListening) {
+                        this.stopListening();
+                    } else {
+                        this.startListening();
+                    }
+                });
+                
+                this.clearBtn.addEventListener('click', () => {
+                    this.clearConversation();
+                });
+                
+                this.muteBtn.addEventListener('click', () => {
+                    this.toggleMute();
+                });
+                
+                // Keyboard shortcuts
+                document.addEventListener('keydown', (event) => {
+                    if (event.code === 'Space' && event.ctrlKey) {
+                        event.preventDefault();
+                        if (this.isListening) {
+                            this.stopListening();
+                        } else {
+                            this.startListening();
+                        }
+                    }
+                });
+            }
+
+            startListening() {
+                if (this.recognition && !this.isListening && !this.isProcessing) {
+                    this.recognition.start();
+                }
+            }
+
+            stopListening() {
+                if (this.recognition && this.isListening) {
+                    this.recognition.stop();
+                    this.isListening = false;
+                    this.updateUI();
+                    this.hideVisualizer();
+                }
+            }
+
+            sendMessage(text) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.addMessage(text, 'user');
+                    this.ws.send(JSON.stringify({
+                        type: 'user_speech',
+                        text: text
+                    }));
+                    this.transcriptEl.textContent = 'Processing...';
+                }
+            }
+
+            addMessage(text, sender) {
+                const messageEl = document.createElement('div');
+                messageEl.className = `message ${sender}-message`;
+                messageEl.textContent = sender === 'user' ? `You: ${text}` : `Assistant: ${text}`;
+                this.conversationEl.appendChild(messageEl);
+                this.conversationEl.scrollTop = this.conversationEl.scrollHeight;
+            }
+
+            playAudioResponse(audioBase64) {
+                if (!this.isMuted) {
+                    const audioBlob = this.base64ToBlob(audioBase64, 'audio/mpeg');
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    this.audioEl.src = audioUrl;
+                    this.audioEl.play().catch(console.error);
+                    
+                    this.audioEl.onended = () => {
+                        URL.revokeObjectURL(audioUrl);
+                    };
+                }
+            }
+
+            initializeStreamingAudio() {
+                // Initialize streaming audio for ultra-low latency playback
+                if (!this.isMuted) {
+                    this.audioChunks = [];
+                    this.audioQueue = [];
+                    this.isStreaming = true;
+                    this.currentChunkIndex = 0;
+                }
+            }
+
+            playAudioChunk(audioBase64) {
+                // Play individual audio chunks as they arrive for real-time streaming
+                if (!this.isMuted && this.isStreaming) {
+                    const audioBlob = this.base64ToBlob(audioBase64, 'audio/mpeg');
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    // Create a new audio element for this chunk
+                    const chunkAudio = new Audio(audioUrl);
+                    chunkAudio.preload = 'auto';
+                    
+                    // Add to queue for sequential playback
+                    this.audioQueue.push({
+                        audio: chunkAudio,
+                        url: audioUrl,
+                        index: this.currentChunkIndex++
+                    });
+                    
+                    // Start playing if this is the first chunk
+                    if (this.audioQueue.length === 1) {
+                        this.playNextChunk();
+                    }
+                }
+            }
+
+            playNextChunk() {
+                if (this.audioQueue.length > 0 && !this.isMuted) {
+                    const chunk = this.audioQueue.shift();
+                    
+                    chunk.audio.onended = () => {
+                        URL.revokeObjectURL(chunk.url);
+                        // Play next chunk when current one ends
+                        if (this.audioQueue.length > 0 || this.isStreaming) {
+                            setTimeout(() => this.playNextChunk(), 10); // Small delay to prevent gaps
+                        }
+                    };
+                    
+                    chunk.audio.onerror = (error) => {
+                        console.error('Audio chunk playback error:', error);
+                        URL.revokeObjectURL(chunk.url);
+                        // Try next chunk on error
+                        if (this.audioQueue.length > 0 || this.isStreaming) {
+                            this.playNextChunk();
+                        }
+                    };
+                    
+                    chunk.audio.play().catch(console.error);
+                }
+            }
+
+            finalizeStreamingAudio() {
+                // Finalize streaming audio playback
+                this.isStreaming = false;
+                
+                // Clean up any remaining chunks after a delay
+                setTimeout(() => {
+                    if (this.audioQueue.length === 0) {
+                        this.audioChunks = [];
+                        this.currentChunkIndex = 0;
+                    }
+                }, 1000);
+            }
+
+            updateLatencyDisplay(latencyData) {
+                // Update latency measurements with color coding
+                this.updateLatencyValue(this.openaiLatencyEl, latencyData.openai_latency, 'OpenAI API');
+                this.updateLatencyValue(this.websocketLatencyEl, latencyData.websocket_connection_latency, 'WebSocket');
+                this.updateLatencyValue(this.firstChunkLatencyEl, latencyData.time_to_first_chunk, 'First Chunk');
+                this.updateLatencyValue(this.totalLatencyEl, latencyData.total_round_trip, 'Total', true);
+                
+                console.log('📊 Latency Measurements:', {
+                    'OpenAI API': `${latencyData.openai_latency.toFixed(2)}ms`,
+                    'WebSocket Connection': `${latencyData.websocket_connection_latency.toFixed(2)}ms`,
+                    'Time to First Chunk': `${latencyData.time_to_first_chunk.toFixed(2)}ms`,
+                    'Total Round-trip': `${latencyData.total_round_trip.toFixed(2)}ms`
+                });
+            }
+
+            updateLatencyValue(element, value, label, isTotal = false) {
+                if (!element) return;
+                
+                const formattedValue = `${value.toFixed(1)}ms`;
+                element.textContent = formattedValue;
+                
+                // Remove existing classes
+                element.classList.remove('fast', 'medium', 'slow');
+                
+                // Add appropriate class based on latency thresholds
+                if (isTotal) {
+                    // Total latency thresholds
+                    if (value < 500) {
+                        element.classList.add('fast');
+                    } else if (value < 1000) {
+                        element.classList.add('medium');
+                    } else {
+                        element.classList.add('slow');
+                    }
+                } else {
+                    // Individual component thresholds
+                    if (label === 'OpenAI API') {
+                        if (value < 300) element.classList.add('fast');
+                        else if (value < 800) element.classList.add('medium');
+                        else element.classList.add('slow');
+                    } else if (label === 'WebSocket') {
+                        if (value < 100) element.classList.add('fast');
+                        else if (value < 200) element.classList.add('medium');
+                        else element.classList.add('slow');
+                    } else if (label === 'First Chunk') {
+                        if (value < 200) element.classList.add('fast');
+                        else if (value < 500) element.classList.add('medium');
+                        else element.classList.add('slow');
+                    }
+                }
+            }
+
+            resetLatencyDisplay() {
+                // Reset all latency displays
+                const elements = [this.openaiLatencyEl, this.websocketLatencyEl, this.firstChunkLatencyEl, this.totalLatencyEl];
+                elements.forEach(el => {
+                    if (el) {
+                        el.textContent = '-';
+                        el.classList.remove('fast', 'medium', 'slow');
+                    }
+                });
+            }
+
+            base64ToBlob(base64, mimeType) {
+                const byteCharacters = atob(base64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                return new Blob([byteArray], { type: mimeType });
+            }
+
+            updateUI() {
+                if (this.isListening) {
+                    this.micButton.className = 'mic-button listening';
+                    this.micButton.innerHTML = '🔴';
+                } else if (this.isProcessing) {
+                    this.micButton.className = 'mic-button processing';
+                    this.micButton.innerHTML = '⏳';
+                } else {
+                    this.micButton.className = 'mic-button';
+                    this.micButton.innerHTML = '🎤';
+                }
+            }
+
+            updateStatus(message, className) {
+                this.statusEl.textContent = message;
+                this.statusEl.className = `status ${className}`;
+            }
+
+            showError(message) {
+                const errorEl = document.createElement('div');
+                errorEl.className = 'error';
+                errorEl.textContent = message;
+                this.conversationEl.appendChild(errorEl);
+                this.conversationEl.scrollTop = this.conversationEl.scrollHeight;
+                
+                setTimeout(() => {
+                    if (errorEl.parentNode) {
+                        errorEl.parentNode.removeChild(errorEl);
+                    }
+                }, 5000);
+            }
+
+            clearConversation() {
+                this.conversationEl.innerHTML = `
+                    <div class="message ai-message">
+                        👋 Hi! I'm your voice assistant. Click the microphone button and start speaking!
+                    </div>
+                `;
+                this.resetLatencyDisplay();
+            }
+
+            toggleMute() {
+                this.isMuted = !this.isMuted;
+                this.muteBtn.textContent = this.isMuted ? 'Unmute Audio' : 'Mute Audio';
+                this.muteBtn.style.background = this.isMuted ? 
+                    'linear-gradient(135deg, #f56565, #e53e3e)' : 
+                    'linear-gradient(135deg, #667eea, #764ba2)';
+            }
+
+            showVisualizer() {
+                this.visualizerEl.style.display = 'flex';
+            }
+
+            hideVisualizer() {
+                this.visualizerEl.style.display = 'none';
+            }
+        }
+
+        // Initialize the voice agent when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VoiceAgent();
+        });
+    </script>
+</body>
+</html> 
