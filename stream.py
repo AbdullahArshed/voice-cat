@@ -442,46 +442,85 @@ async def get_ai_response(user_text: str, websocket: WebSocket, conversation_his
         # Add to conversation history
         conversation_history.append({"role": "user", "content": user_text})
         
-        # Get AI response
-        chat_completion = await client.chat.completions.create(
+        # Send typing indicator
+        await websocket.send_json({
+            "type": "ai_typing",
+            "content": "AI is thinking..."
+        })
+        
+        # Get streaming AI response
+        stream = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a helpful AI assistant in a voice call. Keep responses conversational and concise (1-2 sentences max)."}
             ] + conversation_history[-10:],  # Keep last 10 messages
-            max_tokens=100,  # Shorter responses for better voice experience
-            temperature=0.7
+            max_tokens=150,  # Shorter responses for better voice experience
+            temperature=0.7,
+            stream=True
         )
         
-        response_text = chat_completion.choices[0].message.content
+        response_text = ""
+        current_sentence = ""
+        
+        # Send initial message container
+        await websocket.send_json({
+            "type": "ai_response_start",
+            "content": ""
+        })
+        
+        # Process streaming response
+        async for chunk in stream:
+            if chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                response_text += content
+                current_sentence += content
+                
+                # Send chunk for real-time display
+                await websocket.send_json({
+                    "type": "ai_chunk",
+                    "content": content,
+                    "full_text": response_text
+                })
+                
+                # Check if we have a complete sentence for audio
+                if any(ending in current_sentence for ending in {'.', '!', '?', '。', '！', '？'}):
+                    # Generate audio for this sentence
+                    audio_b64 = await synthesize_audio(current_sentence.strip())
+                    if audio_b64:
+                        await websocket.send_json({
+                            "type": "audio_chunk",
+                            "content": audio_b64,
+                            "text": current_sentence.strip()
+                        })
+                    current_sentence = ""
+        
+        # Handle any remaining text
+        if current_sentence.strip():
+            audio_b64 = await synthesize_audio(current_sentence.strip())
+            if audio_b64:
+                await websocket.send_json({
+                    "type": "audio_chunk", 
+                    "content": audio_b64,
+                    "text": current_sentence.strip()
+                })
+        
+        # Add full response to conversation history
         conversation_history.append({"role": "assistant", "content": response_text})
         
-        logger.info(f"✅ AI response: '{response_text}'")
-        
-        # Send AI response text
+        # Send final response
         await websocket.send_json({
-            "type": "ai_response",
+            "type": "ai_response_complete",
             "content": response_text
         })
-
-        # Generate and send audio
-        logger.info("🔊 Generating audio response...")
-        audio_b64 = await synthesize_audio(response_text)
-        if audio_b64:
-            logger.info("✅ Audio response generated and sent")
-            await websocket.send_json({
-                "type": "audio_response",
-                "content": audio_b64
-            })
-        else:
-            logger.warning("⚠️ Failed to generate audio response")
         
-        logger.info("🎯 AI response complete - ready for next user input")
+        logger.info(f"✅ AI response complete: '{response_text}'")
+        logger.info("🎯 Ready for next user input")
         
     except Exception as e:
         logger.error(f"❌ AI response error: {e}")
         await websocket.send_json({
             "type": "error",
-            "content": "Failed to get AI response"
+            "content": f"Failed to get AI response: {str(e)}"
         })
 
 

@@ -153,6 +153,17 @@
             max-width: 60%;
         }
 
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            text-align: center;
+            font-size: 12px;
+            border-radius: 10px;
+            margin: 10px auto;
+            max-width: 80%;
+        }
+
         .call-controls {
             padding: 30px;
             background: white;
@@ -324,6 +335,8 @@
                 this.isConnected = false;
                 this.conversationHistory = [];
                 this.currentAudio = null;
+                this.currentAiMessage = null; // For streaming responses
+                this.liveTranscriptionElement = null; // For live speech display
                 
                 this.initializeElements();
                 this.connectWebSocket();
@@ -342,48 +355,111 @@
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${protocol}//${window.location.host}/stream-chat`;
                 
+                console.log('🔗 Connecting to WebSocket:', wsUrl);
                 this.ws = new WebSocket(wsUrl);
                 
                 this.ws.onopen = () => {
                     this.isConnected = true;
+                    console.log('✅ WebSocket connected successfully');
                     this.updateStatus('Connected - Ready to chat!', 'connected');
                     this.addSystemMessage('Connected to streaming voice chat');
                 };
                 
                 this.ws.onmessage = (event) => {
-                    const message = JSON.parse(event.data);
-                    this.handleWebSocketMessage(message);
+                    try {
+                        const message = JSON.parse(event.data);
+                        console.log('📨 Received message:', message.type, message);
+                        this.handleWebSocketMessage(message);
+                    } catch (error) {
+                        console.error('❌ Error parsing WebSocket message:', error, event.data);
+                    }
                 };
                 
-                this.ws.onclose = () => {
+                this.ws.onclose = (event) => {
                     this.isConnected = false;
+                    console.log('📞 WebSocket closed:', event.code, event.reason);
                     this.updateStatus('Disconnected', 'disconnected');
                     this.addSystemMessage('Disconnected from server');
+                    
+                    // Auto-reconnect after 3 seconds if it wasn't a clean close
+                    if (event.code !== 1000) {
+                        setTimeout(() => {
+                            console.log('🔄 Attempting to reconnect...');
+                            this.connectWebSocket();
+                        }, 3000);
+                    }
                 };
                 
                 this.ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
+                    console.error('❌ WebSocket error:', error);
                     this.updateStatus('Connection error', 'disconnected');
                 };
             }
 
             handleWebSocketMessage(message) {
                 switch (message.type) {
+                    case 'ai_typing':
+                        this.callStatus.textContent = '🤖 AI is thinking...';
+                        break;
+                        
+                    case 'ai_response_start':
+                        // Create a new AI message container for streaming
+                        this.currentAiMessage = document.createElement('div');
+                        this.currentAiMessage.className = 'message ai current-response';
+                        this.currentAiMessage.textContent = '';
+                        this.chatArea.appendChild(this.currentAiMessage);
+                        this.scrollToBottom();
+                        break;
+                        
+                    case 'ai_chunk':
+                        // Add chunk to current AI message
+                        if (this.currentAiMessage) {
+                            this.currentAiMessage.textContent = message.full_text;
+                            this.scrollToBottom();
+                        }
+                        this.callStatus.textContent = '🔴 On Call - AI is responding...';
+                        break;
+                        
+                    case 'ai_response_complete':
+                        // Finalize the AI response
+                        if (this.currentAiMessage) {
+                            this.currentAiMessage.className = 'message ai'; // Remove current-response class
+                            this.currentAiMessage.textContent = `AI: ${message.content}`;
+                            this.currentAiMessage = null;
+                        } else {
+                            // Fallback if no streaming message was created
+                            this.addCallMessage(`AI: ${message.content}`, 'ai');
+                        }
+                        this.callStatus.textContent = '🔴 On Call - Speak naturally';
+                        break;
+                        
+                    case 'audio_chunk':
+                        this.playAudio(message.content);
+                        console.log('Playing audio for:', message.text || 'audio chunk');
+                        break;
+                        
                     case 'ai_response':
+                        // Legacy support for non-streaming responses
                         this.addCallMessage(`AI: ${message.content}`, 'ai');
                         this.callStatus.textContent = '🔴 On Call - Speak naturally';
                         break;
+                        
                     case 'audio_response':
+                        // Legacy support for audio responses
                         this.playAudio(message.content);
                         break;
+                        
                     case 'system':
                         this.addCallMessage(message.content, 'system');
                         break;
+                        
                     case 'error':
-                        this.addCallMessage(`Error: ${message.content}`, 'error');
+                        this.addCallMessage(`❌ Error: ${message.content}`, 'error');
+                        console.error('WebSocket error:', message.content);
                         break;
+                        
                     default:
-                        console.log('Unknown message type:', message.type);
+                        console.log('Unknown message type:', message.type, message);
                 }
             }
 
@@ -437,15 +513,21 @@
                             const transcript = event.results[i][0].transcript;
                             if (event.results[i].isFinal) {
                                 finalTranscript += transcript + ' ';
+                                // Remove any interim transcription display before showing final
+                                this.removeLiveTranscription();
                                 this.sendTranscription(transcript.trim());
                             } else {
                                 interimTranscript += transcript;
                             }
                         }
                         
-                        // Update status with current speech
-                        if (interimTranscript) {
-                            this.callStatus.textContent = `🎤 Listening: "${interimTranscript}"`;
+                        // Show live transcription as user speaks
+                        if (interimTranscript.trim()) {
+                            this.showLiveTranscription(interimTranscript.trim());
+                            this.callStatus.textContent = `🎤 Speaking: "${interimTranscript.trim()}"`;
+                        } else {
+                            this.removeLiveTranscription();
+                            this.callStatus.textContent = '🔴 On Call - Speak naturally';
                         }
                     };
                     
@@ -484,6 +566,9 @@
                     this.recognition.stop();
                 }
                 
+                // Clean up live transcription
+                this.removeLiveTranscription();
+                
                 // Update UI
                 this.callButton.className = 'call-button inactive';
                 this.callButton.innerHTML = '📞 Start Call';
@@ -497,10 +582,42 @@
                 }, 2000);
             }
 
+            showLiveTranscription(text) {
+                // Remove any existing live transcription
+                this.removeLiveTranscription();
+                
+                // Create new live transcription element
+                this.liveTranscriptionElement = document.createElement('div');
+                this.liveTranscriptionElement.className = 'message live-transcription';
+                this.liveTranscriptionElement.textContent = `🎤 "${text}"`;
+                this.liveTranscriptionElement.id = 'live-transcription';
+                
+                this.chatArea.appendChild(this.liveTranscriptionElement);
+                this.scrollToBottom();
+            }
+            
+            removeLiveTranscription() {
+                if (this.liveTranscriptionElement) {
+                    this.liveTranscriptionElement.remove();
+                    this.liveTranscriptionElement = null;
+                }
+                
+                // Also remove by ID in case reference is lost
+                const existingLive = document.getElementById('live-transcription');
+                if (existingLive) {
+                    existingLive.remove();
+                }
+            }
+
             sendTranscription(text) {
-                if (!this.isConnected || !text.trim()) return;
+                if (!this.isConnected || !text.trim()) {
+                    console.log('Cannot send transcription:', { connected: this.isConnected, text: text.trim() });
+                    return;
+                }
                 
                 try {
+                    console.log('📤 Sending transcription:', text.trim());
+                    
                     this.sendWebSocketMessage({
                         type: 'user_speech',
                         content: text.trim()
@@ -509,8 +626,12 @@
                     // Show user speech in chat immediately
                     this.addCallMessage(`You: ${text.trim()}`, 'user');
                     
+                    // Update status to show we're waiting for AI
+                    this.callStatus.textContent = '🤖 Waiting for AI response...';
+                    
                 } catch (error) {
-                    console.error('Error sending transcription:', error);
+                    console.error('❌ Error sending transcription:', error);
+                    this.addCallMessage(`❌ Failed to send message: ${error.message}`, 'error');
                 }
             }
 
@@ -518,7 +639,16 @@
 
             sendWebSocketMessage(message) {
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify(message));
+                    try {
+                        console.log('📤 Sending WebSocket message:', message.type, message);
+                        this.ws.send(JSON.stringify(message));
+                    } catch (error) {
+                        console.error('❌ Error sending WebSocket message:', error);
+                        this.addCallMessage(`❌ Failed to send message: ${error.message}`, 'error');
+                    }
+                } else {
+                    console.error('❌ WebSocket not connected. Ready state:', this.ws?.readyState);
+                    this.addCallMessage('❌ Not connected to server', 'error');
                 }
             }
 
